@@ -19,7 +19,7 @@ libraryDependencies ++= Seq(
   "org.typelevel" %% "log4cats-slf4j" % "2.1.1",  // Direct Slf4j Support - Recommended
   // logging
   "org.slf4j" % "slf4j-api" % "1.7.28",
-  "org.slf4j" % "slf4j-jdk14" % "1.7.28",
+  "org.slf4j" % "slf4j-jdk14" % "1.7.35",
   "com.typesafe.scala-logging" % "scala-logging-slf4j_2.10" % "2.1.2",
 )
 
