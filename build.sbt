@@ -15,7 +15,7 @@ libraryDependencies ++= Seq(
   "org.typelevel" %% "cats-effect" % "3.3.5",
   "com.softwaremill.sttp.client3" %% "core" % "3.4.1",
   "com.softwaremill.sttp.client3" %% "async-http-client-backend-cats" % "3.3.6", // for cats-effect 3.x
-  "com.github.cb372" %% "cats-retry" % "3.0.0",
+  "com.github.cb372" %% "cats-retry" % "3.1.0",
   "org.typelevel" %% "log4cats-slf4j" % "2.2.0",  // Direct Slf4j Support - Recommended
   // logging
   "org.slf4j" % "slf4j-api" % "1.7.28",
