@@ -12,7 +12,7 @@ libraryDependencies ++= Seq(
   "io.circe" %% "circe-parser"
 ).map(_ % circeVersion)
 libraryDependencies ++= Seq(
-  "org.typelevel" %% "cats-effect" % "3.3.7",
+  "org.typelevel" %% "cats-effect" % "3.6-0142603",
   "com.softwaremill.sttp.client3" %% "core" % "3.8.3",
   "com.softwaremill.sttp.client3" %% "async-http-client-backend-cats" % "3.8.3", // for cats-effect 3.x
   "com.github.cb372" %% "cats-retry" % "3.1.0",
