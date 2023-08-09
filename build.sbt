@@ -13,7 +13,7 @@ libraryDependencies ++= Seq(
 ).map(_ % circeVersion)
 libraryDependencies ++= Seq(
   "org.typelevel" %% "cats-effect" % "3.3.7",
-  "com.softwaremill.sttp.client3" %% "core" % "3.8.3",
+  "com.softwaremill.sttp.client3" %% "core" % "3.9.0",
   "com.softwaremill.sttp.client3" %% "async-http-client-backend-cats" % "3.8.3", // for cats-effect 3.x
   "com.github.cb372" %% "cats-retry" % "3.1.0",
   "org.typelevel" %% "log4cats-slf4j" % "2.2.0",  // Direct Slf4j Support - Recommended
