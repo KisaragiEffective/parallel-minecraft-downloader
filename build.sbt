@@ -2,7 +2,7 @@ name := "parallel-minecraft-downloader"
 
 version := "0.1"
 
-scalaVersion := "2.13.10"
+scalaVersion := "2.13.12"
 
 val circeVersion = "0.14.1"
 
