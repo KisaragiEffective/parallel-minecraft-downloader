@@ -1,7 +1,8 @@
 #![deny(clippy::all)]
 #![warn(clippy::nursery)]
 
-use std::collections::HashMap;
+mod model;
+
 use std::convert::Infallible;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
@@ -14,75 +15,19 @@ use std::process::exit;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use base64::alphabet::{STANDARD};
+use base64::alphabet::STANDARD;
 use base64::Engine;
 use base64::engine::GeneralPurposeConfig;
 use clap::Parser;
-use rayon::iter::{ParallelIterator, IntoParallelIterator};
-use reqwest::{Url};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use reqwest::Url;
 use reqwest::tls::Version;
-use serde::{Deserialize};
+use serde::Deserialize;
 
 use sha1_smol::Sha1;
+use model::{AssetMappingRoot, DetailedVersionMetadata, PartialVersionManifestRoot};
+use crate::model::{Sha1Hash, VersionIdentifier};
 
-#[derive(Deserialize)]
-struct PartialVersionManifestRoot {
-    versions: Vec<VersionMetadata>
-}
-
-#[derive(Deserialize)]
-struct VersionMetadata {
-    id: VersionIdentifier,
-    url: Url
-}
-
-#[derive(Deserialize, Eq, PartialEq, Clone, Debug)]
-struct VersionIdentifier(String);
-
-impl FromStr for VersionIdentifier {
-    type Err = Infallible;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(s.to_owned()))
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DetailedVersionMetadata {
-    asset_index: AssetIndexPointee
-}
-
-#[derive(Deserialize)]
-struct AssetIndexPointee {
-    url: Url
-}
-
-#[derive(Deserialize)]
-struct AssetMappingRoot {
-    objects: HashMap<String, AssetMappingValue, JunkHasher>,
-}
-
-#[derive(Deserialize)]
-struct AssetMappingValue {
-    hash: Sha1Hash,
-    size: usize,
-}
-
-#[derive(Deserialize, Eq, PartialEq)]
-struct Sha1Hash(sha1_smol::Digest);
-
-impl Sha1Hash {
-    fn human_readable(&self) -> String {
-        self.0.to_string()
-    }
-}
-
-impl Display for Sha1Hash {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.human_readable())
-    }
-}
 
 #[derive(Parser)]
 struct Args {
