@@ -1,27 +1,28 @@
+#![deny(clippy::all)]
+#![warn(clippy::nursery)]
+
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::ffi::OsStr;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::hash::{BuildHasher, Hasher};
-use std::io::{BufReader, BufWriter, Read, stderr, stdin, stdout, Write};
+use std::io::{BufReader, BufWriter, Read, stderr, Write};
 use std::mem::transmute;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::process::exit;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use base64::alphabet::{Alphabet, STANDARD};
+use base64::alphabet::{STANDARD};
 use base64::Engine;
 use base64::engine::GeneralPurposeConfig;
 use clap::Parser;
 use rayon::iter::{ParallelIterator, IntoParallelIterator};
-use reqwest::{ClientBuilder, Url};
+use reqwest::{Url};
 use reqwest::tls::Version;
-use serde::{Deserialize, Deserializer};
-use serde::de::Error as _;
+use serde::{Deserialize};
+
 use sha1_smol::Sha1;
 
 #[derive(Deserialize)]
@@ -68,28 +69,6 @@ struct AssetMappingValue {
     size: usize,
 }
 
-//noinspection SpellCheckingInspection
-#[repr(u8)]
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
-enum LowercasedHexChar {
-    _0 = 48,
-    _1 = 49,
-    _2 = 50,
-    _3 = 51,
-    _4 = 52,
-    _5 = 53,
-    _6 = 54,
-    _7 = 55,
-    _8 = 56,
-    _9 = 57,
-    A = 97,
-    B = 98,
-    C = 99,
-    D = 100,
-    E = 101,
-    F = 102,
-}
-
 #[derive(Deserialize, Eq, PartialEq)]
 struct Sha1Hash(sha1_smol::Digest);
 
@@ -134,10 +113,10 @@ impl Hasher for JunkHasher {
         let bytes = if end >= 8 {
             &bytes[(end - 8)..end]
         } else {
-            &bytes
+            bytes
         };
         for i in 1..=8 {
-            self.x |= bytes.get(i - 1).map_or(0, |x| (*x as u64) << (8 - i) * 8)
+            self.x |= bytes.get(i - 1).map_or(0, |x| (*x as u64) << ((8 - i) * 8))
         }
 
         self.x = self.x.wrapping_mul(65535);
@@ -212,7 +191,7 @@ fn main() {
             eprintln!("{hash}: processing");
         }
 
-        let (url, path) = create_channel(&hash, &args.dot_minecraft);
+        let (url, path) = create_channel(hash, &args.dot_minecraft);
 
         'download: {
             if !force {
@@ -266,7 +245,7 @@ fn create_channel(hash: &Sha1Hash, base_dir: &Path) -> (Url, PathBuf) {
     let hash = &hash;
 
     let head = unsafe { std::str::from_utf8_unchecked(hash.as_bytes().get_unchecked(0..2)) };
-    let path = base_dir.join("assets").join("objects").join(&head).join(hash);
+    let path = base_dir.join("assets").join("objects").join(head).join(hash);
 
     const M: &str = "https://resources.download.minecraft.net/";
     let mut raw = String::with_capacity(M.len() + 1 + head.len() + 1 + hash.len());
