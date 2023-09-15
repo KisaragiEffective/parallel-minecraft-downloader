@@ -2,7 +2,7 @@ use serde::Deserialize;
 use url::Url;
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use crate::JunkHasher;
 

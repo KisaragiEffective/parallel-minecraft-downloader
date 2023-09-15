@@ -3,16 +3,12 @@
 
 mod model;
 
-use std::convert::Infallible;
-use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::hash::{BuildHasher, Hasher};
 use std::io::{BufReader, BufWriter, Read, stderr, Write};
-use std::mem::transmute;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::exit;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use base64::alphabet::STANDARD;
@@ -23,12 +19,10 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use reqwest::blocking::Client;
 use reqwest::Url;
 use reqwest::tls::Version;
-use serde::Deserialize;
 
 use sha1_smol::Sha1;
 use model::{AssetMappingRoot, DetailedVersionMetadata, PartialVersionManifestRoot};
 use crate::model::{AssetMappingValue, Sha1Hash, VersionIdentifier};
-
 
 #[derive(Parser)]
 struct Args {
@@ -44,7 +38,7 @@ struct Args {
     unsafe_danger_skip_validation_hash_and_size: bool,
 }
 
-struct JunkHasher {
+pub struct JunkHasher {
     x: u64
 }
 
@@ -87,7 +81,7 @@ impl Default for JunkHasher {
 
 fn main() {
     let args = Args::parse();
-    let requested_version = args.version;
+    let requested_version = &args.version;
 
     // TLS 1.2未満は安全ではないので禁止
     let client = reqwest::blocking::ClientBuilder::new().https_only(true).min_tls_version(Version::TLS_1_2)
@@ -102,7 +96,7 @@ fn main() {
         .header("Accept", "application/json")
         .send().expect("failed to list up versions")
         .json::<PartialVersionManifestRoot>().expect("invalid or non-conformed JSON was returned")
-        .versions.into_iter().find(|x| x.id == requested_version);
+        .versions.into_iter().find(|x| &x.id == requested_version);
 
     let Some(version_manifest) = version_manifest else {
         eprintln!("version {requested_version} could not be found in the remote.", requested_version = &requested_version.0);
@@ -188,36 +182,28 @@ fn process((_, meta): (String, AssetMappingValue), args: &Args, client: Arc<Clie
     }
 }
 
-
-fn extract_starting_two_hex_digit(hash: &Sha1Hash) -> &str {
-    let hash = hash.human_readable();
-    let head = unsafe { std::str::from_utf8_unchecked(hash.as_bytes().get_unchecked(0..2)) };
-
-    head
-}
-
 fn create_asset_url(hash: &Sha1Hash) -> Url {
-    let head = extract_starting_two_hex_digit(hash);
+    let hash2 = hash.human_readable();
+    let head = unsafe { std::str::from_utf8_unchecked(hash2.as_bytes().get_unchecked(0..2)) };
     let hash = hash.human_readable();
 
     const M: &str = "https://resources.download.minecraft.net/";
     let mut raw = String::with_capacity(M.len() + 1 + head.len() + 1 + hash.len());
     raw += M;
     raw += "/";
-    raw += unsafe { transmute(head) };
+    raw += head;
     raw += "/";
     raw += &hash;
 
     // this never panics.
-    let url = Url::parse(&raw).unwrap();
-
-    url
+    Url::parse(&raw).unwrap()
 }
 
 fn create_channel(hash: &Sha1Hash, base_dir: &Path) -> (Url, PathBuf) {
     // this never panics.
     let url = create_asset_url(hash);
-    let head = extract_starting_two_hex_digit(hash);
+    let hash2 = hash.human_readable();
+    let head = unsafe { std::str::from_utf8_unchecked(hash2.as_bytes().get_unchecked(0..2)) };
     let hash = hash.human_readable();
     let hash = &hash;
 
