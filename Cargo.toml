@@ -10,7 +10,7 @@ base64 = "0.21.4"
 clap = { version = "4.4.4", features = ["derive"] }
 md5 = "0.7.0"
 rayon = "1.8.0"
-reqwest = { version = "0.11.20", features = ["blocking", "json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.11.22", features = ["blocking", "json", "rustls-tls"], default-features = false }
 serde = { version = "1.0.188", features = ["derive"] }
 sha1_smol = { version = "1.0.0", features = ["std", "serde"] }
 tokio = { version = "1.32.0", features = ["rt-multi-thread", "macros"] }
