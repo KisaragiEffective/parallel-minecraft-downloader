@@ -81,6 +81,34 @@ impl Default for JunkHasher {
 
 fn main() {
     let args = Args::parse();
+    if !args.dot_minecraft.exists() || !args.dot_minecraft.is_dir() {
+        eprintln!("--minecraft-directory must point existing directory");
+        exit(1);
+    }
+
+    // prepare
+
+    {
+        let r = args.dot_minecraft.join("assets");
+        if !r.exists() {
+            std::fs::create_dir(&r).expect("auto-mkdir of asset dir failed");
+
+            let o = r.join("objects");
+
+            if !o.exists() {
+                std::fs::create_dir(&o).expect("auto-mkdir of asset/objects dir failed");
+
+                for i in 0..256 {
+                    let s = format!("{i:02x}");
+                    let p = o.join(s);
+
+                    if !p.exists() {
+                        std::fs::create_dir(&p).expect("auto-mkdir of asset/object/__ dir failed");
+                    }
+                }
+            }
+        }
+    }
     let requested_version = &args.version;
 
     // TLS 1.2未満は安全ではないので禁止
