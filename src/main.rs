@@ -9,7 +9,6 @@ use std::io::{BufReader, BufWriter, Read, stderr, Write};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::exit;
-use std::sync::Arc;
 use std::time::Duration;
 use base64::alphabet::STANDARD;
 use base64::Engine;
@@ -89,9 +88,6 @@ fn main() {
         .build()
         .expect("failed to initialize HTTP client");
 
-    // HTTPクライアントを作るのは少なくともゼロコストではないのでスレッドをまたいで共有できるようにする
-    let client = Arc::new(client);
-
     let version_manifest = client.get("https://launchermeta.mojang.com/mc/game/version_manifest.json")
         .header("Accept", "application/json")
         .send().expect("failed to list up versions")
@@ -123,10 +119,11 @@ fn main() {
     }
 
     let force = args.re_download;
-    assets.into_par_iter().for_each(|kv| process(kv, &args, Arc::clone(&client), force));
+    // HTTPクライアントを作るのは少なくともゼロコストではないので使いまわす
+    assets.into_par_iter().for_each(|kv| process(kv, &args, &client, force));
 }
 
-fn process((_, meta): (String, AssetMappingValue), args: &Args, client: Arc<Client>, force: bool) {
+fn process((_, meta): (String, AssetMappingValue), args: &Args, client: &Client, force: bool) {
     let size = meta.size;
     let hash = &meta.hash;
     {
