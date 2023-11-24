@@ -5,7 +5,7 @@ mod model;
 
 use std::fs::File;
 use std::hash::{BuildHasher, Hasher};
-use std::io::{BufReader, BufWriter, Read, stderr, Write};
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::exit;
@@ -124,15 +124,13 @@ fn main() {
     let (please_exit, exit_rx) = std::sync::mpsc::channel();
 
     let console_writer = std::thread::spawn(move || {
-        (move || {
+        {
             let exit_rx = exit_rx;
             let run = || {
-                let v = match exit_rx.recv_timeout(Duration::ZERO) { Ok(()) => false, Err(e) => match e {
+                match exit_rx.recv_timeout(Duration::ZERO) { Ok(()) => false, Err(e) => match e {
                     RecvTimeoutError::Timeout => true,
                     RecvTimeoutError::Disconnected => false,
-                } };
-                // println!("{v}");
-                v
+                } }
             };
 
             // println!("{}", run());
@@ -140,7 +138,7 @@ fn main() {
                 // eprintln!("status emit 1");
                 match receiver.recv_timeout(Duration::ZERO) {
                     Ok(v) => eprintln!("{v}"),
-                    Err(e) => {
+                    Err(_) => {
                         std::thread::yield_now();
                         std::thread::sleep(Duration::from_millis(10));
                     }
@@ -152,7 +150,7 @@ fn main() {
             while let Ok(r) = receiver.recv_timeout(Duration::ZERO) {
                 eprintln!("{r}");
             }
-        })()
+        }
     });
 
     // HTTPクライアントを作るのは少なくともゼロコストではないので使いまわす
