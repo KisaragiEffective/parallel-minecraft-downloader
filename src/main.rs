@@ -5,10 +5,11 @@ mod model;
 
 use std::fs::File;
 use std::hash::{BuildHasher, Hasher};
-use std::io::{BufReader, BufWriter, Read, stderr, Write};
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::exit;
+use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 use base64::alphabet::STANDARD;
 use base64::Engine;
@@ -119,16 +120,53 @@ fn main() {
     }
 
     let force = args.re_download;
+    let (sender, receiver) = std::sync::mpsc::channel::<String>();
+    let (please_exit, exit_rx) = std::sync::mpsc::channel();
+
+    let console_writer = std::thread::spawn(move || {
+        {
+            let exit_rx = exit_rx;
+            let run = || {
+                match exit_rx.recv_timeout(Duration::ZERO) { Ok(()) => false, Err(e) => match e {
+                    RecvTimeoutError::Timeout => true,
+                    RecvTimeoutError::Disconnected => false,
+                } }
+            };
+
+            // println!("{}", run());
+            while run() {
+                // eprintln!("status emit 1");
+                match receiver.recv_timeout(Duration::ZERO) {
+                    Ok(v) => eprintln!("{v}"),
+                    Err(_) => {
+                        std::thread::yield_now();
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                }
+            }
+
+            // eprintln!("exit asked");
+
+            while let Ok(r) = receiver.recv_timeout(Duration::ZERO) {
+                eprintln!("{r}");
+            }
+        }
+    });
+
     // HTTPクライアントを作るのは少なくともゼロコストではないので使いまわす
-    assets.into_par_iter().for_each(|kv| process(kv, &args, &client, force));
+    assets.into_par_iter().for_each(|kv| process(kv, &args, &client, force, &sender));
+    // eprintln!("ended!!");
+    please_exit.send(()).expect("error send");
+    // eprintln!("signal sended, waiting join");
+    console_writer.join().expect("error join");
+    // eprintln!("joined");
 }
 
-fn process((_, meta): (String, AssetMappingValue), args: &Args, client: &Client, force: bool) {
+fn process((_, meta): (String, AssetMappingValue), args: &Args, client: &Client, force: bool, sender: &std::sync::mpsc::Sender<String>) {
     let size = meta.size;
     let hash = &meta.hash;
     {
-        let _ = stderr().lock();
-        eprintln!("{hash}: processing");
+        sender.send(format!("{hash}: processing"));
     }
 
     let (url, path) = create_channel(hash, &args.dot_minecraft);
@@ -149,8 +187,7 @@ fn process((_, meta): (String, AssetMappingValue), args: &Args, client: &Client,
                                 let base64_engine = base64::engine::GeneralPurpose::new(&STANDARD, GeneralPurposeConfig::new());
                                 if let Ok(decoded_azure_md5_header) = base64_engine.decode(azure_md5_header.as_bytes()) {
                                     if decoded_azure_md5_header == actual {
-                                        let _ = stderr().lock();
-                                        eprintln!("{hash}: cached; skipping");
+                                        sender.send(format!("{hash}: cached; skipping"));
                                         break 'download
                                     }
                                 }
@@ -167,14 +204,21 @@ fn process((_, meta): (String, AssetMappingValue), args: &Args, client: &Client,
         let actual_hash = sha1_hash(&bytes);
         if args.unsafe_danger_skip_validation_hash_and_size || bytes.len() == size && &actual_hash == hash {
             if args.unsafe_danger_skip_validation_hash_and_size {
-                let _ = stderr().lock();
-                eprintln!("{hash}: actual size or hash did not match, but it will be SAVED!! Please be aware that this feature is NOT SUPPORTED. USE AT YOUR OWN PERIL.");
+                sender.send(format!(
+                "{hash}: actual size or hash did not match, but it will be SAVED!! Please be aware that this feature is NOT SUPPORTED. USE AT YOUR OWN PERIL."
+                ));
             }
-            let mut buf_writer = BufWriter::with_capacity(size, File::options().create(true).write(true).open(&path).expect("failed to open"));
+            sender.send(format!("try: {:?}", &path));
+            let f = match File::options().create(true).write(true).open(&path) {
+                Ok(f) => f,
+                Err(e) => panic!("failed to open {path:?}: {e:?}")
+            };
+            let mut buf_writer = BufWriter::with_capacity(size, f);
             buf_writer.write_all(&bytes).expect("failed to write to file");
         } else {
-            let _ = stderr().lock();
-            eprintln!("{hash}: hash mismatch. actual hash is {actual_hash}; skipping");
+            sender.send(
+            format!("{hash}: hash mismatch. actual hash is {actual_hash}; skipping")
+            );
         }
     }
 }
