@@ -12,7 +12,6 @@ use std::process::exit;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 use base64::alphabet::STANDARD;
-use base64::Engine;
 use base64::engine::GeneralPurposeConfig;
 use clap::Parser;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -181,8 +180,10 @@ fn main() {
         }
     });
 
+    // Base64エンジンを作るのはゼロコストではないので使いまわす
+    let base64_engine = base64::engine::GeneralPurpose::new(&STANDARD, GeneralPurposeConfig::new());
     // HTTPクライアントを作るのは少なくともゼロコストではないので使いまわす
-    assets.into_par_iter().for_each(|kv| process(kv, &args, &client, force, &sender));
+    assets.into_par_iter().for_each(|kv| process(kv, &args, &client, force, &sender, &base64_engine));
     // eprintln!("ended!!");
     please_exit.send(()).expect("error send");
     // eprintln!("signal sended, waiting join");
@@ -190,7 +191,14 @@ fn main() {
     // eprintln!("joined");
 }
 
-fn process((_, meta): (String, AssetMappingValue), args: &Args, client: &Client, force: bool, sender: &std::sync::mpsc::Sender<String>) {
+fn process<BE: base64::Engine>(
+    (_, meta): (String, AssetMappingValue),
+    args: &Args,
+    client: &Client,
+    force: bool,
+    sender: &std::sync::mpsc::Sender<String>,
+    base64: &BE
+) {
     let size = meta.size;
     let hash = &meta.hash;
     {
@@ -212,7 +220,7 @@ fn process((_, meta): (String, AssetMappingValue), args: &Args, client: &Client,
                         if let Ok(read_size) = br.read_to_end(&mut buf) {
                             if read_size == size {
                                 let actual = md5::compute(&buf).0;
-                                let base64_engine = base64::engine::GeneralPurpose::new(&STANDARD, GeneralPurposeConfig::new());
+                                let base64_engine = base64;
                                 if let Ok(decoded_azure_md5_header) = base64_engine.decode(azure_md5_header.as_bytes()) {
                                     if decoded_azure_md5_header == actual {
                                         sender.send(format!("{hash}: cached; skipping"));
