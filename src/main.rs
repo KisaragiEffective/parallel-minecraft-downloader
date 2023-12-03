@@ -208,29 +208,26 @@ fn process<BE: base64::Engine>(
     let (url, path) = create_channel(hash, &args.dot_minecraft);
 
     'download: {
-        if !force {
+        'check_cached: {
+            if force { break 'check_cached }
             // make sure that
-            if let Ok(res) = client.head(url.clone()).send() {
-                let headers = res.headers();
-                if let Some(azure_md5_header) = headers.get("content-md5") {
-                    if let Ok(fd) = File::open(&path) {
-                        let mut br = BufReader::with_capacity(size, fd);
-                        let mut buf = vec![];
+            let Ok(res) = client.head(url.clone()).send() else { break 'check_cached };
+            let headers = res.headers();
+            let Some(azure_md5_header) = headers.get("content-md5") else { break 'check_cached };
+            let Ok(fd) = File::open(&path) else { break 'check_cached };
+            let mut br = BufReader::with_capacity(size, fd);
+            let mut buf = vec![];
+            let Ok(read_size) = br.read_to_end(&mut buf) else { break 'check_cached };
+            if read_size != size { break 'check_cached }
+            let actual = md5::compute(&buf).0;
+            let base64_engine = base64;
+            let Ok(decoded_azure_md5_header) = base64_engine.decode(azure_md5_header.as_bytes()) else {
+                break 'check_cached
+            };
 
-                        if let Ok(read_size) = br.read_to_end(&mut buf) {
-                            if read_size == size {
-                                let actual = md5::compute(&buf).0;
-                                let base64_engine = base64;
-                                if let Ok(decoded_azure_md5_header) = base64_engine.decode(azure_md5_header.as_bytes()) {
-                                    if decoded_azure_md5_header == actual {
-                                        sender.send(format!("{hash}: cached; skipping"));
-                                        break 'download
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            if decoded_azure_md5_header == actual {
+                sender.send(format!("{hash}: cached; skipping"));
+                break 'download
             }
         }
 
