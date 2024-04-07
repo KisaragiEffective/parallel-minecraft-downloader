@@ -242,7 +242,7 @@ fn process<BE: base64::Engine>(
                 ));
             }
             sender.send(format!("try: {:?}", &path));
-            let f = match File::options().create(true).write(true).open(&path) {
+            let f = match File::options().create(true).truncate(true).write(true).open(&path) {
                 Ok(f) => f,
                 Err(e) => panic!("failed to open {path:?}: {e:?}")
             };
