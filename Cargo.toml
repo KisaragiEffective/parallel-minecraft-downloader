@@ -12,7 +12,7 @@ clap = { version = "4.5.4", features = ["derive"] }
 md5 = "0.7.0"
 rayon = "1.10.0"
 reqwest = { version = "0.12.4", features = ["blocking", "json", "rustls-tls"], default-features = false }
-serde = { version = "1.0.197", features = ["derive"] }
+serde = { version = "1.0.198", features = ["derive"] }
 sha1_smol = { version = "1.0.0", features = ["std", "serde"] }
 tokio = { version = "1.37.0", features = ["rt-multi-thread", "macros"] }
 url = { version = "2.5.0", features = ["serde"] }
