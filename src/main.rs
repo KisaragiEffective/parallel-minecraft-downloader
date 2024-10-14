@@ -183,7 +183,7 @@ fn main() {
     // Base64エンジンを作るのはゼロコストではないので使いまわす
     let base64_engine = base64::engine::GeneralPurpose::new(&STANDARD, GeneralPurposeConfig::new());
     // HTTPクライアントを作るのは少なくともゼロコストではないので使いまわす
-    assets.into_par_iter().for_each(|kv| process(kv, &args, &client, force, &sender, &base64_engine));
+    assets.into_par_iter().for_each(|kv| process(kv.1, &args, &client, force, &sender, &base64_engine));
     // eprintln!("ended!!");
     please_exit.send(()).expect("error send");
     // eprintln!("signal sended, waiting join");
@@ -192,7 +192,7 @@ fn main() {
 }
 
 fn process<BE: base64::Engine>(
-    (_, meta): (String, AssetMappingValue),
+    meta: AssetMappingValue,
     args: &Args,
     client: &Client,
     force: bool,
@@ -202,7 +202,7 @@ fn process<BE: base64::Engine>(
     let size = meta.size;
     let hash = &meta.hash;
     {
-        sender.send(format!("{hash}: processing"));
+        sender.send(format!("{hash}: processing")).unwrap_or_default();
     }
 
     let (url, path) = create_channel(hash, &args.dot_minecraft);
@@ -226,7 +226,7 @@ fn process<BE: base64::Engine>(
             };
 
             if decoded_azure_md5_header == actual {
-                sender.send(format!("{hash}: cached; skipping"));
+                sender.send(format!("{hash}: cached; skipping")).unwrap_or_default();
                 break 'download
             }
         }
@@ -239,9 +239,9 @@ fn process<BE: base64::Engine>(
             if args.unsafe_danger_skip_validation_hash_and_size {
                 sender.send(format!(
                 "{hash}: actual size or hash did not match, but it will be SAVED!! Please be aware that this feature is NOT SUPPORTED. USE AT YOUR OWN PERIL."
-                ));
+                )).unwrap_or_default();
             }
-            sender.send(format!("try: {:?}", &path));
+            sender.send(format!("try: {:?}", &path)).unwrap_or_default();
             let f = match File::options().create(true).truncate(true).write(true).open(&path) {
                 Ok(f) => f,
                 Err(e) => panic!("failed to open {path:?}: {e:?}")
@@ -250,8 +250,8 @@ fn process<BE: base64::Engine>(
             buf_writer.write_all(&bytes).expect("failed to write to file");
         } else {
             sender.send(
-            format!("{hash}: hash mismatch. actual hash is {actual_hash}; skipping")
-            );
+                format!("{hash}: hash mismatch. actual hash is {actual_hash}; skipping")
+            ).unwrap_or_default();
         }
     }
 }
@@ -287,8 +287,5 @@ fn create_channel(hash: &Sha1Hash, base_dir: &Path) -> (Url, PathBuf) {
 }
 
 fn sha1_hash(bytes: &[u8]) -> Sha1Hash {
-    let mut s = Sha1::new();
-    s.update(bytes);
-
-    Sha1Hash(s.digest())
+    Sha1Hash(Sha1::from(bytes).digest())
 }
