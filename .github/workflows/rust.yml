@@ -17,7 +17,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - uses: Swatinem/rust-cache@v2.7.8
+    - uses: Swatinem/rust-cache@v2.8.0
       with:
         prefix-key: ${{ env.CI_RUSTC_VERSION }}-${{ env.CI_RUST_CACHE_VERSION }}-${{ hashFiles('**/Cargo.lock') }}        
     - name: Build
