@@ -3,6 +3,8 @@
 
 mod model;
 mod args;
+mod console_message;
+mod hash;
 
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
@@ -13,15 +15,17 @@ use std::time::Duration;
 use base64::alphabet::STANDARD;
 use base64::engine::GeneralPurposeConfig;
 use clap::Parser;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, ParallelIterator, IndexedParallelIterator};
 use reqwest::blocking::Client;
 use reqwest::Url;
 use reqwest::tls::Version;
 
 use sha1_smol::Sha1;
 use model::{AssetMappingRoot, DetailedVersionMetadata, PartialVersionManifestRoot};
-use crate::model::{AssetMappingValue, Sha1Hash};
+use crate::model::AssetMappingValue;
 use crate::args::Args;
+use crate::console_message::{ConsoleMessage, CorruptedMetadataAction, State};
+use crate::hash::Sha1Hash;
 
 fn create_necessary_folders(base: &Path) {
     let asset_dir = base.join("assets");
@@ -46,6 +50,21 @@ fn create_necessary_folders(base: &Path) {
 }
 
 const APPLICATION_JSON: &str = "application/json";
+
+fn print_console_message(assets_num: usize, console_message: ConsoleMessage) {
+    let ConsoleMessage { item_index, hash, state } = console_message;
+
+    let s: Box<str> = match state {
+        State::Checking => "checking".into(),
+        State::Cached => "cached; skipping".into(),
+        State::Processing => "writing".into(),
+        State::Done => "done".into(),
+        State::CorruptedMetadata(CorruptedMetadataAction::Skipped { actual_hash }) => format!("hash mismatch. actual hash is {actual_hash}; skipping").into_boxed_str(),
+        State::CorruptedMetadata(CorruptedMetadataAction::ForciblyContinued) => "actual size or hash did not match, but it will be SAVED!! Please be aware that this feature is NOT SUPPORTED. USE AT YOUR OWN PERIL.".into()
+    };
+
+    eprintln!("[{item_index:04}/{assets_num:04}] {h}: {s}", h = hash.human_readable());
+}
 
 fn main() {
     let args = Args::parse();
@@ -91,17 +110,19 @@ fn main() {
         .send().expect("failed to fetch asset list")
         .json::<AssetMappingRoot>().expect("invalid or non-conformed JSON was returned").objects;
 
+    let assets_num = assets.len();
+
     if let Some(threads) = args.threads {
         rayon::ThreadPoolBuilder::new().num_threads(threads.get()).build_global().unwrap();
     }
 
-    let (sender, receiver) = std::sync::mpsc::channel::<String>();
+    let (sender, receiver) = std::sync::mpsc::channel::<ConsoleMessage>();
     let (please_exit, exit_rx) = std::sync::mpsc::channel();
 
     let console_writer = std::thread::spawn(move || {
         while matches!(exit_rx.recv_timeout(Duration::ZERO), Err(RecvTimeoutError::Timeout)) {
             match receiver.recv_timeout(Duration::ZERO) {
-                Ok(v) => eprintln!("{v}"),
+                Ok(console_message) => print_console_message(assets_num, console_message),
                 Err(_) => {
                     std::thread::yield_now();
                     std::thread::sleep(Duration::from_millis(10));
@@ -109,8 +130,8 @@ fn main() {
             }
         }
 
-        while let Ok(r) = receiver.recv_timeout(Duration::ZERO) {
-            eprintln!("{r}");
+        while let Ok(console_message) = receiver.recv_timeout(Duration::ZERO) {
+            print_console_message(assets_num, console_message);
         }
     });
 
@@ -118,7 +139,12 @@ fn main() {
     let base64_engine = base64::engine::GeneralPurpose::new(&STANDARD, GeneralPurposeConfig::new());
     // HTTPクライアントを作るのは少なくともゼロコストではないので使いまわす
     let Args { dot_minecraft, re_download, unsafe_danger_skip_validation_hash_and_size, .. } = args;
-    assets.into_par_iter().for_each(|kv| process(kv.1, &client, &base64_engine, &sender, &dot_minecraft, unsafe_danger_skip_validation_hash_and_size, re_download));
+    assets
+        .into_values().collect::<Vec<_>>()
+        .into_par_iter()
+        .enumerate()
+        .for_each(|(i, k)| process(k, &client, &base64_engine, &sender, i + 1, &dot_minecraft, unsafe_danger_skip_validation_hash_and_size, re_download));
+
     please_exit.send(()).expect("error send");
     console_writer.join().expect("error join");
 }
@@ -127,18 +153,22 @@ fn process<BE: base64::Engine>(
     meta: AssetMappingValue,
     client: &Client,
     base64: &BE,
-    sender: &std::sync::mpsc::Sender<String>,
+    sender: &std::sync::mpsc::Sender<ConsoleMessage>,
+    item_index: usize,
     dot_minecraft: &Path,
     unsafe_danger_skip_validation_hash_and_size: bool,
     force: bool,
 ) {
     let size = meta.size;
-    let hash = &meta.hash;
-    {
-        sender.send(format!("{hash}: processing")).unwrap_or_default();
-    }
+    let hash = meta.hash;
 
-    let (url, path) = create_channel(hash, dot_minecraft);
+    sender.send(ConsoleMessage {
+        item_index,
+        hash,
+        state: State::Checking,
+    }).unwrap_or_default();
+
+    let (url, path) = create_channel(&hash, dot_minecraft);
 
     let is_cached = || {
         if force { return false }
@@ -164,7 +194,12 @@ fn process<BE: base64::Engine>(
     };
 
     if is_cached() {
-        sender.send(format!("{hash}: cached; skipping")).unwrap_or_default();
+        sender.send(ConsoleMessage {
+            item_index,
+            hash,
+            state: State::Cached,
+        }).unwrap_or_default();
+
         return
     }
 
@@ -172,23 +207,39 @@ fn process<BE: base64::Engine>(
         .bytes().expect("failed to read response");
 
     let actual_hash = sha1_hash(&bytes);
-    if unsafe_danger_skip_validation_hash_and_size || bytes.len() == size && &actual_hash == hash {
+    if unsafe_danger_skip_validation_hash_and_size || bytes.len() == size && actual_hash == hash {
         if unsafe_danger_skip_validation_hash_and_size {
-            sender.send(format!(
-                "{hash}: actual size or hash did not match, but it will be SAVED!! Please be aware that this feature is NOT SUPPORTED. USE AT YOUR OWN PERIL."
-            )).unwrap_or_default();
+            sender.send(ConsoleMessage {
+                item_index,
+                hash,
+                state: State::CorruptedMetadata(CorruptedMetadataAction::ForciblyContinued),
+            }).unwrap_or_default();
         }
-        sender.send(format!("try: {:?}", &path)).unwrap_or_default();
+
+        sender.send(ConsoleMessage {
+            item_index,
+            hash,
+            state: State::Processing,
+        }).unwrap_or_default();
+
         let f = match File::options().create(true).truncate(true).write(true).open(&path) {
             Ok(f) => f,
             Err(e) => panic!("failed to open {path:?}: {e:?}")
         };
         let mut buf_writer = BufWriter::with_capacity(size, f);
         buf_writer.write_all(&bytes).expect("failed to write to file");
+
+        sender.send(ConsoleMessage {
+            item_index,
+            hash,
+            state: State::Done,
+        }).unwrap_or_default();
     } else {
-        sender.send(
-            format!("{hash}: hash mismatch. actual hash is {actual_hash}; skipping")
-        ).unwrap_or_default();
+        sender.send(ConsoleMessage {
+            item_index,
+            hash,
+            state: State::CorruptedMetadata(CorruptedMetadataAction::Skipped { actual_hash })
+        }).unwrap_or_default()
     }
 }
 
