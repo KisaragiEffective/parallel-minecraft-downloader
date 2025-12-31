@@ -149,6 +149,7 @@ fn main() {
     console_writer.join().expect("error join");
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process<BE: base64::Engine>(
     meta: AssetMappingValue,
     client: &Client,
