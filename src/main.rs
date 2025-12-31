@@ -34,8 +34,8 @@ fn create_necessary_folders(base: &Path) {
             std::fs::create_dir(&objects_dir).expect("auto-mkdir of asset/objects dir failed");
         }
 
-        for hash_head in 0..256 {
-            let hash_prefix = format!("{hash_head:02x}");
+        for hash_prefix_value in 0..256 {
+            let hash_prefix = format!("{hash_prefix_value:02x}");
             let hash_prefix_dir = objects_dir.join(hash_prefix);
 
             if !hash_prefix_dir.exists() {
@@ -100,11 +100,7 @@ fn main() {
     let (please_exit, exit_rx) = std::sync::mpsc::channel();
 
     let console_writer = std::thread::spawn(move || {
-        // explicit move
-        let exit_rx = exit_rx;
-        let run = || matches!(exit_rx.recv_timeout(Duration::ZERO), Err(RecvTimeoutError::Timeout));
-
-        while run() {
+        while matches!(exit_rx.recv_timeout(Duration::ZERO), Err(RecvTimeoutError::Timeout)) {
             match receiver.recv_timeout(Duration::ZERO) {
                 Ok(v) => eprintln!("{v}"),
                 Err(_) => {
