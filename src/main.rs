@@ -95,7 +95,6 @@ fn main() {
         rayon::ThreadPoolBuilder::new().num_threads(threads.get()).build_global().unwrap();
     }
 
-    let force = args.re_download;
     let (sender, receiver) = std::sync::mpsc::channel::<String>();
     let (please_exit, exit_rx) = std::sync::mpsc::channel();
 
@@ -118,18 +117,20 @@ fn main() {
     // Base64エンジンを作るのはゼロコストではないので使いまわす
     let base64_engine = base64::engine::GeneralPurpose::new(&STANDARD, GeneralPurposeConfig::new());
     // HTTPクライアントを作るのは少なくともゼロコストではないので使いまわす
-    assets.into_par_iter().for_each(|kv| process(kv.1, &args, &client, force, &sender, &base64_engine));
+    let Args { dot_minecraft, re_download, unsafe_danger_skip_validation_hash_and_size, .. } = args;
+    assets.into_par_iter().for_each(|kv| process(kv.1, &client, &base64_engine, &sender, &dot_minecraft, unsafe_danger_skip_validation_hash_and_size, re_download));
     please_exit.send(()).expect("error send");
     console_writer.join().expect("error join");
 }
 
 fn process<BE: base64::Engine>(
     meta: AssetMappingValue,
-    args: &Args,
     client: &Client,
-    force: bool,
+    base64: &BE,
     sender: &std::sync::mpsc::Sender<String>,
-    base64: &BE
+    dot_minecraft: &Path,
+    unsafe_danger_skip_validation_hash_and_size: bool,
+    force: bool,
 ) {
     let size = meta.size;
     let hash = &meta.hash;
@@ -137,7 +138,7 @@ fn process<BE: base64::Engine>(
         sender.send(format!("{hash}: processing")).unwrap_or_default();
     }
 
-    let (url, path) = create_channel(hash, &args.dot_minecraft);
+    let (url, path) = create_channel(hash, dot_minecraft);
 
     let is_cached = || {
         if force { return false }
@@ -171,8 +172,8 @@ fn process<BE: base64::Engine>(
         .bytes().expect("failed to read response");
 
     let actual_hash = sha1_hash(&bytes);
-    if args.unsafe_danger_skip_validation_hash_and_size || bytes.len() == size && &actual_hash == hash {
-        if args.unsafe_danger_skip_validation_hash_and_size {
+    if unsafe_danger_skip_validation_hash_and_size || bytes.len() == size && &actual_hash == hash {
+        if unsafe_danger_skip_validation_hash_and_size {
             sender.send(format!(
                 "{hash}: actual size or hash did not match, but it will be SAVED!! Please be aware that this feature is NOT SUPPORTED. USE AT YOUR OWN PERIL."
             )).unwrap_or_default();
