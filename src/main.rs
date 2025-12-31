@@ -2,11 +2,12 @@
 #![warn(clippy::nursery)]
 
 mod model;
+mod args;
+mod console_message;
+mod hash;
 
 use std::fs::File;
-use std::hash::{BuildHasher, Hasher};
 use std::io::{BufReader, BufWriter, Read, Write};
-use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::mpsc::RecvTimeoutError;
@@ -14,68 +15,55 @@ use std::time::Duration;
 use base64::alphabet::STANDARD;
 use base64::engine::GeneralPurposeConfig;
 use clap::Parser;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, ParallelIterator, IndexedParallelIterator};
 use reqwest::blocking::Client;
 use reqwest::Url;
 use reqwest::tls::Version;
 
 use sha1_smol::Sha1;
 use model::{AssetMappingRoot, DetailedVersionMetadata, PartialVersionManifestRoot};
-use crate::model::{AssetMappingValue, Sha1Hash, VersionIdentifier};
+use crate::model::AssetMappingValue;
+use crate::args::Args;
+use crate::console_message::{ConsoleMessage, CorruptedMetadataAction, State};
+use crate::hash::Sha1Hash;
 
-#[derive(Parser)]
-struct Args {
-    #[clap(long)]
-    version: VersionIdentifier,
-    #[clap(short = 'j', long)]
-    threads: Option<NonZeroUsize>,
-    #[clap(short = 'd', long = "minecraft-directory")]
-    dot_minecraft: PathBuf,
-    #[clap(short, long)]
-    re_download: bool,
-    #[clap(long)]
-    unsafe_danger_skip_validation_hash_and_size: bool,
-}
+fn create_necessary_folders(base: &Path) {
+    let asset_dir = base.join("assets");
+    if !asset_dir.exists() {
+        std::fs::create_dir(&asset_dir).expect("auto-mkdir of asset dir failed");
 
-pub struct JunkHasher {
-    x: u64
-}
+        let objects_dir = asset_dir.join("objects");
 
-impl Hasher for JunkHasher {
-    fn finish(&self) -> u64 {
-        self.x
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        // we can simply pass, with some trick; we know that there are "paths", so removing file extension may decrease conflict.
-        let end = bytes.iter().enumerate().rfind(|(_, x)| **x == b'.').map_or(bytes.len() - 1, |(pos, _)| pos - 1);
-        let bytes = if end >= 8 {
-            &bytes[(end - 8)..end]
-        } else {
-            bytes
-        };
-        for i in 1..=8 {
-            self.x |= bytes.get(i - 1).map_or(0, |x| (*x as u64) << ((8 - i) * 8))
+        if !objects_dir.exists() {
+            std::fs::create_dir(&objects_dir).expect("auto-mkdir of asset/objects dir failed");
         }
 
-        self.x = self.x.wrapping_mul(65535);
-        // haha that's just random
-        self.x = self.x.wrapping_add(0x231a_0edc_d310_77a2);
+        for hash_prefix_value in 0..256 {
+            let hash_prefix = format!("{hash_prefix_value:02x}");
+            let hash_prefix_dir = objects_dir.join(hash_prefix);
+
+            if !hash_prefix_dir.exists() {
+                std::fs::create_dir(&hash_prefix_dir).expect("auto-mkdir of asset/object/__ dir failed");
+            }
+        }
     }
 }
 
-impl BuildHasher for JunkHasher {
-    type Hasher = Self;
+const APPLICATION_JSON: &str = "application/json";
 
-    fn build_hasher(&self) -> Self::Hasher {
-        Self { x: 0xc71b_58d7_e3ff_62ab }
-    }
-}
+fn print_console_message(assets_num: usize, console_message: ConsoleMessage) {
+    let ConsoleMessage { item_index, hash, state } = console_message;
 
-impl Default for JunkHasher {
-    fn default() -> Self {
-        Self { x: 0xc71b_58d7_e3ff_62ab }
-    }
+    let s: Box<str> = match state {
+        State::Checking => "checking".into(),
+        State::Cached => "cached; skipping".into(),
+        State::Processing => "writing".into(),
+        State::Done => "done".into(),
+        State::CorruptedMetadata(CorruptedMetadataAction::Skipped { actual_hash }) => format!("hash mismatch. actual hash is {actual_hash}; skipping").into_boxed_str(),
+        State::CorruptedMetadata(CorruptedMetadataAction::ForciblyContinued) => "actual size or hash did not match, but it will be SAVED!! Please be aware that this feature is NOT SUPPORTED. USE AT YOUR OWN PERIL.".into()
+    };
+
+    eprintln!("[{item_index:04}/{assets_num:04}] {h}: {s}", h = hash.human_readable());
 }
 
 fn main() {
@@ -86,28 +74,8 @@ fn main() {
     }
 
     // prepare
+    create_necessary_folders(&args.dot_minecraft);
 
-    {
-        let r = args.dot_minecraft.join("assets");
-        if !r.exists() {
-            std::fs::create_dir(&r).expect("auto-mkdir of asset dir failed");
-
-            let o = r.join("objects");
-
-            if !o.exists() {
-                std::fs::create_dir(&o).expect("auto-mkdir of asset/objects dir failed");
-
-                for i in 0..256 {
-                    let s = format!("{i:02x}");
-                    let p = o.join(s);
-
-                    if !p.exists() {
-                        std::fs::create_dir(&p).expect("auto-mkdir of asset/object/__ dir failed");
-                    }
-                }
-            }
-        }
-    }
     let requested_version = &args.version;
 
     // TLS 1.2未満は安全ではないので禁止
@@ -117,7 +85,7 @@ fn main() {
         .expect("failed to initialize HTTP client");
 
     let version_manifest = client.get("https://launchermeta.mojang.com/mc/game/version_manifest.json")
-        .header("Accept", "application/json")
+        .header("Accept", APPLICATION_JSON)
         .send().expect("failed to list up versions")
         .json::<PartialVersionManifestRoot>().expect("invalid or non-conformed JSON was returned")
         .versions.into_iter().find(|x| &x.id == requested_version);
@@ -130,7 +98,7 @@ fn main() {
     println!("downloading detailed version metadata for {requested_version} = {url}", requested_version = &requested_version.0, url = &version_manifest.url);
 
     let url_to_asset_index = client.get(version_manifest.url)
-        .header("Accept", "application/json")
+        .header("Accept", APPLICATION_JSON)
         .send().expect("failed to fetch version metadata")
         .json::<DetailedVersionMetadata>().expect("invalid or non-conformed JSON was returned")
         .asset_index.url;
@@ -138,121 +106,141 @@ fn main() {
     println!("downloading asset list for {requested_version} = {url}", requested_version = &requested_version.0, url = &url_to_asset_index);
 
     let assets = client.get(url_to_asset_index)
-        .header("Accept", "application/json")
+        .header("Accept", APPLICATION_JSON)
         .send().expect("failed to fetch asset list")
         .json::<AssetMappingRoot>().expect("invalid or non-conformed JSON was returned").objects;
+
+    let assets_num = assets.len();
 
     if let Some(threads) = args.threads {
         rayon::ThreadPoolBuilder::new().num_threads(threads.get()).build_global().unwrap();
     }
 
-    let force = args.re_download;
-    let (sender, receiver) = std::sync::mpsc::channel::<String>();
+    let (sender, receiver) = std::sync::mpsc::channel::<ConsoleMessage>();
     let (please_exit, exit_rx) = std::sync::mpsc::channel();
 
     let console_writer = std::thread::spawn(move || {
-        {
-            let exit_rx = exit_rx;
-            let run = || {
-                match exit_rx.recv_timeout(Duration::ZERO) { Ok(()) => false, Err(e) => match e {
-                    RecvTimeoutError::Timeout => true,
-                    RecvTimeoutError::Disconnected => false,
-                } }
-            };
-
-            // println!("{}", run());
-            while run() {
-                // eprintln!("status emit 1");
-                match receiver.recv_timeout(Duration::ZERO) {
-                    Ok(v) => eprintln!("{v}"),
-                    Err(_) => {
-                        std::thread::yield_now();
-                        std::thread::sleep(Duration::from_millis(10));
-                    }
+        while matches!(exit_rx.recv_timeout(Duration::ZERO), Err(RecvTimeoutError::Timeout)) {
+            match receiver.recv_timeout(Duration::ZERO) {
+                Ok(console_message) => print_console_message(assets_num, console_message),
+                Err(_) => {
+                    std::thread::yield_now();
+                    std::thread::sleep(Duration::from_millis(10));
                 }
             }
+        }
 
-            // eprintln!("exit asked");
-
-            while let Ok(r) = receiver.recv_timeout(Duration::ZERO) {
-                eprintln!("{r}");
-            }
+        while let Ok(console_message) = receiver.recv_timeout(Duration::ZERO) {
+            print_console_message(assets_num, console_message);
         }
     });
 
     // Base64エンジンを作るのはゼロコストではないので使いまわす
     let base64_engine = base64::engine::GeneralPurpose::new(&STANDARD, GeneralPurposeConfig::new());
     // HTTPクライアントを作るのは少なくともゼロコストではないので使いまわす
-    assets.into_par_iter().for_each(|kv| process(kv.1, &args, &client, force, &sender, &base64_engine));
-    // eprintln!("ended!!");
+    let Args { dot_minecraft, re_download, unsafe_danger_skip_validation_hash_and_size, .. } = args;
+    assets
+        .into_values().collect::<Vec<_>>()
+        .into_par_iter()
+        .enumerate()
+        .for_each(|(i, k)| process(k, &client, &base64_engine, &sender, i + 1, &dot_minecraft, unsafe_danger_skip_validation_hash_and_size, re_download));
+
     please_exit.send(()).expect("error send");
-    // eprintln!("signal sended, waiting join");
     console_writer.join().expect("error join");
-    // eprintln!("joined");
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process<BE: base64::Engine>(
     meta: AssetMappingValue,
-    args: &Args,
     client: &Client,
+    base64: &BE,
+    sender: &std::sync::mpsc::Sender<ConsoleMessage>,
+    item_index: usize,
+    dot_minecraft: &Path,
+    unsafe_danger_skip_validation_hash_and_size: bool,
     force: bool,
-    sender: &std::sync::mpsc::Sender<String>,
-    base64: &BE
 ) {
     let size = meta.size;
-    let hash = &meta.hash;
-    {
-        sender.send(format!("{hash}: processing")).unwrap_or_default();
+    let hash = meta.hash;
+
+    sender.send(ConsoleMessage {
+        item_index,
+        hash,
+        state: State::Checking,
+    }).unwrap_or_default();
+
+    let (url, path) = create_channel(&hash, dot_minecraft);
+
+    let is_cached = || {
+        if force { return false }
+        let Ok(res) = client.head(url.clone()).send() else { return false };
+        let headers = res.headers();
+        let Some(azure_md5_header) = headers.get("content-md5") else { return false };
+        let Ok(fd) = File::open(&path) else { return false };
+        let mut br = BufReader::with_capacity(size, fd);
+        let mut buf = vec![];
+        let Ok(read_size) = br.read_to_end(&mut buf) else { return false };
+        if read_size != size { return false }
+        let actual = md5::compute(&buf).0;
+        let base64_engine = base64;
+        let Ok(decoded_azure_md5_header) = base64_engine.decode(azure_md5_header.as_bytes()) else {
+            return false
+        };
+
+        if decoded_azure_md5_header == actual {
+            return true
+        }
+
+        false
+    };
+
+    if is_cached() {
+        sender.send(ConsoleMessage {
+            item_index,
+            hash,
+            state: State::Cached,
+        }).unwrap_or_default();
+
+        return
     }
 
-    let (url, path) = create_channel(hash, &args.dot_minecraft);
+    let bytes = client.get(url).send().expect("failed to get")
+        .bytes().expect("failed to read response");
 
-    'download: {
-        'check_cached: {
-            if force { break 'check_cached }
-            // make sure that
-            let Ok(res) = client.head(url.clone()).send() else { break 'check_cached };
-            let headers = res.headers();
-            let Some(azure_md5_header) = headers.get("content-md5") else { break 'check_cached };
-            let Ok(fd) = File::open(&path) else { break 'check_cached };
-            let mut br = BufReader::with_capacity(size, fd);
-            let mut buf = vec![];
-            let Ok(read_size) = br.read_to_end(&mut buf) else { break 'check_cached };
-            if read_size != size { break 'check_cached }
-            let actual = md5::compute(&buf).0;
-            let base64_engine = base64;
-            let Ok(decoded_azure_md5_header) = base64_engine.decode(azure_md5_header.as_bytes()) else {
-                break 'check_cached
-            };
-
-            if decoded_azure_md5_header == actual {
-                sender.send(format!("{hash}: cached; skipping")).unwrap_or_default();
-                break 'download
-            }
+    let actual_hash = sha1_hash(&bytes);
+    if unsafe_danger_skip_validation_hash_and_size || bytes.len() == size && actual_hash == hash {
+        if unsafe_danger_skip_validation_hash_and_size {
+            sender.send(ConsoleMessage {
+                item_index,
+                hash,
+                state: State::CorruptedMetadata(CorruptedMetadataAction::ForciblyContinued),
+            }).unwrap_or_default();
         }
 
-        let bytes = client.get(url).send().expect("failed to get")
-            .bytes().expect("failed to read response");
+        sender.send(ConsoleMessage {
+            item_index,
+            hash,
+            state: State::Processing,
+        }).unwrap_or_default();
 
-        let actual_hash = sha1_hash(&bytes);
-        if args.unsafe_danger_skip_validation_hash_and_size || bytes.len() == size && &actual_hash == hash {
-            if args.unsafe_danger_skip_validation_hash_and_size {
-                sender.send(format!(
-                "{hash}: actual size or hash did not match, but it will be SAVED!! Please be aware that this feature is NOT SUPPORTED. USE AT YOUR OWN PERIL."
-                )).unwrap_or_default();
-            }
-            sender.send(format!("try: {:?}", &path)).unwrap_or_default();
-            let f = match File::options().create(true).truncate(true).write(true).open(&path) {
-                Ok(f) => f,
-                Err(e) => panic!("failed to open {path:?}: {e:?}")
-            };
-            let mut buf_writer = BufWriter::with_capacity(size, f);
-            buf_writer.write_all(&bytes).expect("failed to write to file");
-        } else {
-            sender.send(
-                format!("{hash}: hash mismatch. actual hash is {actual_hash}; skipping")
-            ).unwrap_or_default();
-        }
+        let f = match File::options().create(true).truncate(true).write(true).open(&path) {
+            Ok(f) => f,
+            Err(e) => panic!("failed to open {path:?}: {e:?}")
+        };
+        let mut buf_writer = BufWriter::with_capacity(size, f);
+        buf_writer.write_all(&bytes).expect("failed to write to file");
+
+        sender.send(ConsoleMessage {
+            item_index,
+            hash,
+            state: State::Done,
+        }).unwrap_or_default();
+    } else {
+        sender.send(ConsoleMessage {
+            item_index,
+            hash,
+            state: State::CorruptedMetadata(CorruptedMetadataAction::Skipped { actual_hash })
+        }).unwrap_or_default()
     }
 }
 

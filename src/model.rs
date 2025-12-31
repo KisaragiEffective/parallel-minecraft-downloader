@@ -2,9 +2,8 @@ use serde::Deserialize;
 use url::Url;
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::fmt::{Display, Formatter};
 use std::str::FromStr;
-use crate::JunkHasher;
+use crate::hash::Sha1Hash;
 
 #[derive(Deserialize)]
 pub struct PartialVersionManifestRoot {
@@ -30,7 +29,7 @@ pub struct AssetIndexPointee {
 
 #[derive(Deserialize)]
 pub struct AssetMappingRoot {
-    pub objects: HashMap<String, AssetMappingValue, JunkHasher>,
+    pub objects: HashMap<String, AssetMappingValue>,
 }
 
 #[derive(Deserialize)]
@@ -47,20 +46,5 @@ impl FromStr for VersionIdentifier {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self(s.to_owned()))
-    }
-}
-
-#[derive(Deserialize, Eq, PartialEq)]
-pub struct Sha1Hash(pub sha1_smol::Digest);
-
-impl Sha1Hash {
-    pub fn human_readable(&self) -> String {
-        self.0.to_string()
-    }
-}
-
-impl Display for Sha1Hash {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.human_readable())
     }
 }
