@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
-use crate::JunkHasher;
 
 #[derive(Deserialize)]
 pub struct PartialVersionManifestRoot {
@@ -30,7 +29,7 @@ pub struct AssetIndexPointee {
 
 #[derive(Deserialize)]
 pub struct AssetMappingRoot {
-    pub objects: HashMap<String, AssetMappingValue, JunkHasher>,
+    pub objects: HashMap<String, AssetMappingValue>,
 }
 
 #[derive(Deserialize)]
