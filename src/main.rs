@@ -16,11 +16,9 @@ use base64::alphabet::STANDARD;
 use base64::engine::GeneralPurposeConfig;
 use clap::Parser;
 use rayon::iter::{IntoParallelIterator, ParallelIterator, IndexedParallelIterator};
-use reqwest::blocking::Client;
-use reqwest::Url;
-use reqwest::tls::Version;
 
 use sha1_smol::Sha1;
+use ureq::Agent;
 use model::{AssetMappingRoot, DetailedVersionMetadata, PartialVersionManifestRoot};
 use crate::model::AssetMappingValue;
 use crate::args::Args;
@@ -78,16 +76,17 @@ fn main() {
 
     let requested_version = &args.version;
 
-    // TLS 1.2未満は安全ではないので禁止
-    let client = reqwest::blocking::ClientBuilder::new().https_only(true).min_tls_version(Version::TLS_1_2)
-        .tcp_keepalive(Duration::from_secs(300))
-        .build()
-        .expect("failed to initialize HTTP client");
+    let agent_config = ureq::Agent::config_builder().https_only(true)
+        .build();
 
-    let version_manifest = client.get("https://launchermeta.mojang.com/mc/game/version_manifest.json")
+    let agent = ureq::Agent::new_with_config(agent_config);
+
+    let version_manifest = agent.get("https://launchermeta.mojang.com/mc/game/version_manifest.json")
         .header("Accept", APPLICATION_JSON)
-        .send().expect("failed to list up versions")
-        .json::<PartialVersionManifestRoot>().expect("invalid or non-conformed JSON was returned")
+        .call()
+        .expect("failed to list up versions")
+        .into_body()
+        .read_json::<PartialVersionManifestRoot>().expect("invalid or non-conformed JSON was returned")
         .versions.into_iter().find(|x| &x.id == requested_version);
 
     let Some(version_manifest) = version_manifest else {
@@ -97,18 +96,20 @@ fn main() {
 
     println!("downloading detailed version metadata for {requested_version} = {url}", requested_version = &requested_version.0, url = &version_manifest.url);
 
-    let url_to_asset_index = client.get(version_manifest.url)
+    let url_to_asset_index = agent.get(version_manifest.url)
         .header("Accept", APPLICATION_JSON)
-        .send().expect("failed to fetch version metadata")
-        .json::<DetailedVersionMetadata>().expect("invalid or non-conformed JSON was returned")
+        .call().expect("failed to fetch version metadata")
+        .into_body()
+        .read_json::<DetailedVersionMetadata>().expect("invalid or non-conformed JSON was returned")
         .asset_index.url;
 
     println!("downloading asset list for {requested_version} = {url}", requested_version = &requested_version.0, url = &url_to_asset_index);
 
-    let assets = client.get(url_to_asset_index)
+    let assets = agent.get(url_to_asset_index)
         .header("Accept", APPLICATION_JSON)
-        .send().expect("failed to fetch asset list")
-        .json::<AssetMappingRoot>().expect("invalid or non-conformed JSON was returned").objects;
+        .call().expect("failed to fetch asset list")
+        .into_body()
+        .read_json::<AssetMappingRoot>().expect("invalid or non-conformed JSON was returned").objects;
 
     let assets_num = assets.len();
 
@@ -143,7 +144,7 @@ fn main() {
         .into_values().collect::<Vec<_>>()
         .into_par_iter()
         .enumerate()
-        .for_each(|(i, k)| process(k, &client, &base64_engine, &sender, i + 1, &dot_minecraft, unsafe_danger_skip_validation_hash_and_size, re_download));
+        .for_each(|(i, k)| process(k, &agent, &base64_engine, &sender, i + 1, &dot_minecraft, unsafe_danger_skip_validation_hash_and_size, re_download));
 
     please_exit.send(()).expect("error send");
     console_writer.join().expect("error join");
@@ -152,7 +153,7 @@ fn main() {
 #[allow(clippy::too_many_arguments)]
 fn process<BE: base64::Engine>(
     meta: AssetMappingValue,
-    client: &Client,
+    client: &Agent,
     base64: &BE,
     sender: &std::sync::mpsc::Sender<ConsoleMessage>,
     item_index: usize,
@@ -173,7 +174,7 @@ fn process<BE: base64::Engine>(
 
     let is_cached = || {
         if force { return false }
-        let Ok(res) = client.head(url.clone()).send() else { return false };
+        let Ok(res) = client.head(url.clone()).call() else { return false };
         let headers = res.headers();
         let Some(azure_md5_header) = headers.get("content-md5") else { return false };
         let Ok(fd) = File::open(&path) else { return false };
@@ -204,8 +205,9 @@ fn process<BE: base64::Engine>(
         return
     }
 
-    let bytes = client.get(url).send().expect("failed to get")
-        .bytes().expect("failed to read response");
+    let bytes = client.get(url).call().expect("failed to get")
+        .into_body()
+        .read_to_vec().expect("failed to read response");
 
     let actual_hash = sha1_hash(&bytes);
     if unsafe_danger_skip_validation_hash_and_size || bytes.len() == size && actual_hash == hash {
@@ -244,7 +246,7 @@ fn process<BE: base64::Engine>(
     }
 }
 
-fn create_asset_url(hash: &Sha1Hash) -> Url {
+fn create_asset_url(hash: &Sha1Hash) -> String {
     let hash2 = hash.human_readable();
     let head = unsafe { std::str::from_utf8_unchecked(hash2.as_bytes().get_unchecked(0..2)) };
     let hash = hash.human_readable();
@@ -257,11 +259,10 @@ fn create_asset_url(hash: &Sha1Hash) -> Url {
     raw += "/";
     raw += &hash;
 
-    // this never panics.
-    Url::parse(&raw).unwrap()
+    raw
 }
 
-fn create_channel(hash: &Sha1Hash, base_dir: &Path) -> (Url, PathBuf) {
+fn create_channel(hash: &Sha1Hash, base_dir: &Path) -> (String, PathBuf) {
     // this never panics.
     let url = create_asset_url(hash);
     let hash2 = hash.human_readable();

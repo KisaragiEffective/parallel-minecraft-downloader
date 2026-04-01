@@ -1,5 +1,4 @@
 use serde::Deserialize;
-use url::Url;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::str::FromStr;
@@ -13,7 +12,7 @@ pub struct PartialVersionManifestRoot {
 #[derive(Deserialize)]
 pub struct VersionMetadata {
     pub id: VersionIdentifier,
-    pub url: Url
+    pub url: String
 }
 
 #[derive(Deserialize)]
@@ -24,7 +23,7 @@ pub struct DetailedVersionMetadata {
 
 #[derive(Deserialize)]
 pub struct AssetIndexPointee {
-    pub url: Url
+    pub url: String
 }
 
 #[derive(Deserialize)]
